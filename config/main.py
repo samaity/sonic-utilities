@@ -30,7 +30,7 @@ SYSLOG_IDENTIFIER = "config"
 SNMP_COMMUNITY_FILE = '/etc/sonic/snmp.yml'
 SPEED_TYPE= ['100G', '50G']
 
-## TDOFIX: Need to change the path of this file 
+## TODOFIX: Need to change the path of this file 
 PLATFORM_ROOT_PATH = '/usr/share/sonic/device'
 BREAKOUT_CFG_FILE = PLATFORM_ROOT_PATH + '/platform.json'
 
@@ -69,11 +69,11 @@ def readJsonFile(fileName):
         with open(fileName) as f:
             result = json.load(f)
     except Exception as e:
-        raise
+        raise Exception(str(e))
     return result
 
 
-def _get_add_delete_interface_dict(interface_name, breakout_mode):
+def _get_child_interface_speed_dict(interface_name, breakout_mode):
         """ Returns list of interfaces needed to be deleted to change the  running breakout mode
         """
         parent_interface_index = re.search("Ethernet(\d+)", interface_name)
@@ -98,18 +98,19 @@ def _get_add_delete_interface_dict(interface_name, breakout_mode):
                         intended_delete_interface = ["Ethernet"+str(int(index)+int(i)) for i in range(int(breakout_mode_start_index.group(1)))]
                         first_part_len = len(intended_delete_interface)
                         intended_delete_interface.extend(["Ethernet"+str(int(index)+int(i)+int(breakout_mode_start_index.group(4).strip("()"))) for i in range(int(breakout_mode_start_index.group(5)))])
-                intended_delete_interface_speed_dict = OrderedDict(( i, breakout_mode_start_index.group(2)) for i in intended_delete_interface[:first_part_len]  )
-                intended_delete_interface_speed_dict.update(OrderedDict((i,breakout_mode_start_index.group(6)) for i in intended_delete_interface[first_part_len:]))
+                child_interface_speed_dict = OrderedDict(( i, breakout_mode_start_index.group(2)) for i in intended_delete_interface[:first_part_len]  )
+                child_interface_speed_dict.update(OrderedDict((i,breakout_mode_start_index.group(6)) for i in intended_delete_interface[first_part_len:]))
         else:
                 breakout_mode_start_index = re.search(SYMMETRIC_SPLIT_BREAKOUT_PATTERN, breakout_mode)
                 if breakout_mode_start_index is not None:
                         intended_delete_interface = ["Ethernet"+str(int(index)+int(i)) for i in range(0,4, 4 / int(breakout_mode_start_index.group(1)) )]
 
-                intended_delete_interface_speed_dict =  OrderedDict(( i, breakout_mode_start_index.group(2)) for i in intended_delete_interface)
-        return intended_delete_interface_speed_dict
+                child_interface_speed_dict =  OrderedDict(( i, breakout_mode_start_index.group(2)) for i in intended_delete_interface)
+        return child_interface_speed_dict
 
 
 def _get_option(ctx,args,incomplete):
+    """ Provides dynamic mode option as per user argument i.e. interface name """
     interface_name = args[-1]
     breakout_file_input = readJsonFile(BREAKOUT_CFG_FILE)
     if interface_name in breakout_file_input:
@@ -1188,10 +1189,12 @@ def breakout(interface_name, mode, verbose):
     """ Set interface breakout mode """
     breakout_file_input = readJsonFile(BREAKOUT_CFG_FILE)
     target_breakout_mode = mode
-    if target_breakout_mode not in breakout_file_input[interface_name]["breakout_modes"]:
-        click.secho('[ERROR] Target mode {} is not available for the port {}'. format(target_breakout_mode, interface_name), fg='red')
-        sys.exit(1)
     if interface_name in breakout_file_input:
+
+        # Check whether target breakout mode is available for the user-selected interface or  not
+        if target_breakout_mode not in breakout_file_input[interface_name]["breakout_modes"]:
+            click.secho('[ERROR] Target mode {} is not available for the port {}'. format(target_breakout_mode, interface_name), fg='red')
+            sys.exit(1)
 
         """ Interface Deletion Logic """
         config_db = ConfigDBConnector()
@@ -1205,7 +1208,7 @@ def breakout(interface_name, mode, verbose):
                 running_breakout_mode = current_breakout_dict[interface_name]["current_brkout_mode"]
                 click.echo()
                 click.echo("\nRunning Breakout Mode : {} \nTarget Breakout Mode : {}".format(running_breakout_mode, target_breakout_mode))
-                intended_delete_interface_speed_dict = _get_add_delete_interface_dict(interface_name, running_breakout_mode)
+                intended_delete_interface_speed_dict = _get_child_interface_speed_dict(interface_name, running_breakout_mode)
                 if intended_delete_interface_speed_dict:
                         click.echo("\nPorts to be deleted : \n {}".format(json.dumps(intended_delete_interface_speed_dict, indent=4)))
                 else:
@@ -1213,7 +1216,7 @@ def breakout(interface_name, mode, verbose):
                      raise click.Abort()
 
         """ Interface Addition Logic """
-        intended_add_interface_speed_dict = _get_add_delete_interface_dict(interface_name, target_breakout_mode)
+        intended_add_interface_speed_dict = _get_child_interface_speed_dict(interface_name, target_breakout_mode)
         if intended_add_interface_speed_dict:
                 click.echo("Ports to be added : \n {}".format(json.dumps(intended_add_interface_speed_dict, indent=4)))
         else:
@@ -1221,7 +1224,7 @@ def breakout(interface_name, mode, verbose):
                 raise click.Abort()
 
         """ Special Case: Dont delete those ports  where the current mode and speed of the parent port remains unchanged
-                          to limit the trafficimpact
+                          to limit the traffic impact
         """
         click.secho("\nAfter running Logic to limit the impact", fg="cyan", underline=True)
         matched_item = [intf for intf, speed in intended_delete_interface_speed_dict.items() if intf in intended_add_interface_speed_dict.keys() and speed == intended_add_interface_speed_dict[intf]]
