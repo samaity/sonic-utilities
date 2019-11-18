@@ -18,18 +18,23 @@ from minigraph import parse_device_desc_xml
 import aaa
 import mlnx
 
-import yaml
-import re
 from collections import OrderedDict
 import ast
 from sfputil.main import get_path_to_port_config_file
+
+# Need in future
+#from sfputil.main import get_path_to_port_config_file
+from portconfig import parse_platform_json_file
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help', '-?'])
 
 SONIC_CFGGEN_PATH = '/usr/local/bin/sonic-cfggen'
 SYSLOG_IDENTIFIER = "config"
+PORT_STR = "Ethernet"
 
 
+# Regex for breakout mode
+BRKOUT_PATTERN = r'(\d{1,3})x(\d{1,3}G)(\[\d{1,3}G\])?(\((\d{1,3})\))?'
 
 """ [TODOFIX | IGNORE]: will change the logic like this
     i.e. BREAKOUT_CFG_FILE = get_path_to_port_config_file(),
@@ -66,6 +71,7 @@ def log_error(msg):
 # Breakout Mode Helper functions
 #
 
+
 # Read given JSON file
 def readJsonFile(fileName):
     try:
@@ -76,51 +82,48 @@ def readJsonFile(fileName):
     return result
 
 
-def _get_child_interface_speed_dict(interface_name, breakout_mode):
+def _get_child_interface_speed_dict(intf, brkout_mode):
     """
     Returns list of interfaces needed to be deleted or added
     to change from  running breakout mode to target breakout mode
     """
 
-    global SYMMETRIC_SPLIT_BREAKOUT_PATTERN, ASYMMETRIC_SPLIT_BREAKOUT_PATTERN
-    parent_interface_index = re.search("Ethernet(\d+)", interface_name)
-    if parent_interface_index is not None:
-        index = parent_interface_index.group(1)
+    try:
+        parent_intf_id = re.search("Ethernet(\d+)", intf)
+        if parent_intf_id is not None:
+            id = parent_intf_id.group(1)
+        else:
+            raise Exception("parent interface index should not be None.")
+    except re.error as e:
+        raise Exception("Invalid regular expression: {}\n Error: {}".format(e.args[0]), e)
 
-    """
-    Regex for  SYMMETRIC breakout_modes
-        Syntax  : number x speed1 [speed2, speed3]
-                : means the parent port lanes are split equally to number of ports denoted by the number.
-                And the speed for each breakout port is default to speed1, but is changeable to speed2, speed3 etc.
-        Example : 1x100G[40G], 2x50G, 4x25G[10G]
-    """
-    SYMMETRIC_SPLIT_BREAKOUT_PATTERN = "(^\d{1})x(\d{2,3}G)(\[\d{2,3}G\])?"
+    # Logic for ASYMMETRIC breakout mode
+    if re.search("\+",brkout_mode) is not None:
+        brkout_parts = brkout_mode.split("+")
+        match_list = [re.match(BRKOUT_PATTERN, i).groups() for i in brkout_parts]
+        if match_list is not None:
+            intf_del_list = []
+            for each_match in match_list:
+                if intf_del_list:
+                    intf_del_list = [PORT_STR+str(int(id)+int(i)) for i in range(0,int(each_match[4]), int(each_match[4])/int(each_match[0]))]
+                    child_intf_dict.update(OrderedDict(( i, each_match[1].encode("utf-8")) for i in intf_del_list))
+                else:
+                    intf_del_list = [PORT_STR+str(int(id)+int(i)) for i in range(0,int(each_match[4]), int(each_match[4])/int(each_match[0]))]
+                    child_intf_dict =  OrderedDict(( i, each_match[1].encode("utf-8")) for i in intf_del_list)
+                id = int(id) + int(str(each_match[4]))
+        else:
+            raise Exception("match_list should not be None.")
 
-    """
-    Regex for ASYMMETRIC breakout_modes
-        Syntax  : number1 x speed1[speed2,..](numberA) + number2 x speedX[speedY,..](numberB) + ...
-                : means numberA of lanes were used for number1 of port(s) with default speed1 and changeable to speed2 etc.,
-                the numberA lanes are assigned equally to the number1 of ports. Same thing for number2, speedX[speedY,..] and numberB and so on.
-        Example : 2x25G(2)+1x50G(2), 1x50G(2)+2x25G(2)
-    """
-    ASYMMETRIC_SPLIT_BREAKOUT_PATTERN = "(^\d{1})x(\d{2,3}G)(\[\d{2,3}G\])?(\(\d{1}\)?)\+(\d{1})x(\d{2,3}G)(\[\d{2,3}G\])?(\(\d{1}\)?)"
-
-    if re.search("\+",breakout_mode) is not None:
-        breakout_mode_start_index = re.search(ASYMMETRIC_SPLIT_BREAKOUT_PATTERN, breakout_mode)
-        if breakout_mode_start_index is not None:
-            intended_delete_interface = ["Ethernet"+str(int(index)+int(i)) for i in range(int(breakout_mode_start_index.group(1)))]
-            first_part_len = len(intended_delete_interface)
-            intended_delete_interface.extend(["Ethernet"+str(int(index)+int(i)+int(breakout_mode_start_index.group(4).strip("()"))) for i in range(int(breakout_mode_start_index.group(5)))])
-        child_interface_speed_dict = OrderedDict(( i, breakout_mode_start_index.group(2)) for i in intended_delete_interface[:first_part_len]  )
-        child_interface_speed_dict.update(OrderedDict((i,breakout_mode_start_index.group(6)) for i in intended_delete_interface[first_part_len:]))
+    # Logic for SYMMETRIC breakout mode
     else:
-        breakout_mode_start_index = re.search(SYMMETRIC_SPLIT_BREAKOUT_PATTERN, breakout_mode)
-        if breakout_mode_start_index is not None:
-            intended_delete_interface = ["Ethernet"+str(int(index)+int(i)) for i in range(0,4, 4 / int(breakout_mode_start_index.group(1)) )]
+        match_list = [re.match(BRKOUT_PATTERN, brkout_mode).groups()]
+        if match_list is not None:
+            intf_del_list = [PORT_STR+str(int(id)+int(i)) for i in range(0,4, int(4)/int(match_list[0][0]))]
+        else:
+            raise Exception("match_list should not be None.")
+        child_intf_dict =  OrderedDict(( i, match_list[0][1]) for i in intf_del_list)
 
-        child_interface_speed_dict =  OrderedDict(( i, breakout_mode_start_index.group(2)) for i in intended_delete_interface)
-    return child_interface_speed_dict
-
+    return child_intf_dict
 
 def _get_option(ctx,args,incomplete):
     """ Provides dynamic mode option as per user argument i.e. interface name """
@@ -135,61 +138,6 @@ def _get_option(ctx,args,incomplete):
                 breakout_mode_options.append(i)
         all_mode_options = [str(c) for c in breakout_mode_options if incomplete in c]
         return all_mode_options
-
-def _generate_new_port_json(interface_name,intended_add_interface_speed_dict, target_breakout_mode):
-        """ Generate new_port_config.json file with only those ports which needs to be added """
-
-        port_dict , port_dict["PORT"] = {} , {}
-        interface_index_list = [re.search("[^\d\W]+(\d{1,3})", i).group(1) for i in intended_add_interface_speed_dict.keys()]
-        platform_file_dict = ast.literal_eval(json.dumps(readJsonFile(BREAKOUT_CFG_FILE)))
-
-        total_lanes, alias_at_lanes = platform_file_dict[interface_name]['lanes'], platform_file_dict[interface_name]['alias_at_lanes']
-        total_lanes_list = total_lanes.split(",")
-        total_alias_list = [alias.strip() for alias in alias_at_lanes.split(",")]
-
-        lane_index_list = [total_lanes_list.index(i) for i in interface_index_list]
-
-        if re.search("\+",target_breakout_mode) is not None:
-            breakout_mode_start_index = re.search(ASYMMETRIC_SPLIT_BREAKOUT_PATTERN, target_breakout_mode)
-            if breakout_mode_start_index is not None:
-
-                for intf, speed in intended_add_interface_speed_dict.items():
-                    start = total_lanes_list.index(re.search("[^\d\W]+(\d{1,3})", intf).group(1))
-                    # Adding 'speed' info to all the interfaces present in port_dict
-                    port_dict["PORT"][intf] = {"speed": speed}
-
-                    # Adding 'lanes' info to all the interfaces present in port_dict
-                    if str(start) == str(breakout_mode_start_index.group(4).strip("()")):
-                        use_lanes = int(breakout_mode_start_index.group(8).strip("()"))/int(breakout_mode_start_index.group(5))
-                        port_dict["PORT"][intf]["lanes"]= ','.join(total_lanes_list[start:start+use_lanes])
-                    else:
-                        use_lanes = int(breakout_mode_start_index.group(4).strip("()"))/int(breakout_mode_start_index.group(1))
-                        port_dict["PORT"][intf]["lanes"]= ','.join(total_lanes_list[start:start+use_lanes])
-
-                    # Adding 'alias' info to all the interfaces present in port_dict
-                    port_dict["PORT"][intf]["alias"]= total_alias_list[start]
-
-        else:
-            breakout_mode_start_index = re.search(SYMMETRIC_SPLIT_BREAKOUT_PATTERN, target_breakout_mode)
-            use_lanes = 4 /int(breakout_mode_start_index.group(1))
-            end = use_lanes
-            if breakout_mode_start_index is not None:
-                for intf, speed in intended_add_interface_speed_dict.items():
-                    start = total_lanes_list.index(re.search("[^\d\W]+(\d{1,3})", intf).group(1))
-
-                    # Adding 'speed' info to all the interfaces present in port_dict
-                    port_dict["PORT"][intf] = {"speed": speed}
-
-                    # Adding 'lanes' info to all the interfaces present in port_dict
-                    port_dict["PORT"][intf]["lanes"]= ','.join(total_lanes_list[start:start+use_lanes])
-
-                    # Adding 'alias' info to all the interfaces present in port_dict
-                    port_dict["PORT"][intf]["alias"]= total_alias_list[start]
-                    start = start + use_lanes
-                    end += use_lanes
-
-        with open('new_port_config.json', 'w') as f:  # writing JSON object
-            json.dump(port_dict, f, indent=4)
 
 #
 # Helper functions
@@ -1211,70 +1159,98 @@ def speed(ctx, interface_name, interface_speed, verbose):
     run_command(command, display_cmd=verbose)
 
 
+
 #
 # 'breakout' subcommand
 #
 @interface.command()
 @click.argument('interface_name', metavar='<interface_name>', required=True)
 @click.argument('mode', required=True, type=click.STRING, autocompletion=_get_option)
-@click.option('-f', '--force-remove-dependencies', is_flag=True,  help='Clear all depenedecies internally first.')
-@click.option('-l', '--load-predefined-config', is_flag=True,  help='load predefied user configuration (alias, lanes, speed etc) first.')
+#@click.option('-f', '--force-remove-dependencies', is_flag=True,  help='Clear all depenedecies internally first.')
+#@click.option('-l', '--load-predefined-config', is_flag=True,  help='load predefied user configuration (alias, lanes, speed etc) first.')
 @click.option('-y', '--yes', is_flag=True, callback=_abort_if_false, expose_value=False, prompt='Do you want to Breakout the port, continue?')
 @click.option('-v', '--verbose', is_flag=True, help="Enable verbose output")
-def breakout(interface_name, mode, verbose):
+@click.pass_context
+def breakout(ctx, interface_name, mode, verbose):
 
     """ Set interface breakout mode """
     breakout_file_input = readJsonFile(BREAKOUT_CFG_FILE)
-    target_breakout_mode = mode
+    target_brkout_mode = mode
 
     if interface_name in breakout_file_input:
         """ Check whether target breakout mode is available for the user-selected interface or  not"""
-        if target_breakout_mode not in breakout_file_input[interface_name]["breakout_modes"]:
-            click.secho('[ERROR] Target mode {} is not available for the port {}'. format(target_breakout_mode, interface_name), fg='red')
+        if target_brkout_mode not in breakout_file_input[interface_name]["breakout_modes"]:
+            click.secho('[ERROR] Target mode {} is not available for the port {}'. format(target_brkout_mode, interface_name), fg='red')
             sys.exit(1)
 
         """ Interface Deletion Logic """
         config_db = ConfigDBConnector()
         config_db.connect()
         port_dict = config_db.get_table('PORT')
-        current_breakout_dict = config_db.get_table('BREAKOUT_CFG')
+        cur_brkout_dict = config_db.get_table('BREAKOUT_CFG')
         if not port_dict:
             click.echo("port_dict is None!")
             raise click.Abort()
         if interface_name in port_dict.keys():
-            running_breakout_mode = current_breakout_dict[interface_name]["current_brkout_mode"]
-            click.echo("\nRunning Breakout Mode : {} \nTarget Breakout Mode : {}".format(running_breakout_mode, target_breakout_mode))
-            intended_delete_interface_speed_dict = _get_child_interface_speed_dict(interface_name, running_breakout_mode)
-            if intended_delete_interface_speed_dict:
-                click.echo("\nPorts to be deleted : \n {}".format(json.dumps(intended_delete_interface_speed_dict, indent=4)))
+            cur_brkout_mode = cur_brkout_dict[interface_name]["current_brkout_mode"]
+            click.echo("\nRunning Breakout Mode : {} \nTarget Breakout Mode : {}".format(cur_brkout_mode, target_brkout_mode))
+            if (cur_brkout_mode == target_brkout_mode):
+                click.secho("[WARNING] No action will be taken as current and desired Breakout Mode are same.", fg='magenta')
+                sys.exit(0)
+
+            # First, Shut down interface
+            config_db = ctx.obj['config_db']
+            if get_interface_naming_mode() == "alias":
+                interface_name = interface_alias_to_name(interface_name)
+                if interface_name is None:
+                    ctx.fail("'interface_name' is None!")
+
+            if interface_name_is_valid(interface_name) is False:
+                ctx.fail("Interface name is invalid. Please enter a valid interface name!!")
+
+            if interface_name.startswith(PORT_STR):
+                config_db.mod_entry("PORT", interface_name, {"admin_status": "down"})
             else:
-                click.echo("port_dict is None!")
+                click.secho("[ERROR] Could not get the correct interface name, exiting", fg='red')
+                sys.exit(1)
+
+            # Get list of interfaces to be deleted
+            del_intf_dict = _get_child_interface_speed_dict(interface_name, cur_brkout_mode)
+            if del_intf_dict:
+                click.echo("\nPorts to be deleted : \n {}".format(json.dumps(del_intf_dict, indent=4)))
+            else:
+                click.secho("[ERROR] del_intf_dict is None! No interfaces are there to be deleted", fg='red')
                 raise click.Abort()
 
         """ Interface Addition Logic """
-        intended_add_interface_speed_dict = _get_child_interface_speed_dict(interface_name, target_breakout_mode)
-        if intended_add_interface_speed_dict:
-            click.echo("Ports to be added : \n {}".format(json.dumps(intended_add_interface_speed_dict, indent=4)))
+        add_intf_dict = _get_child_interface_speed_dict(interface_name, target_brkout_mode)
+        if add_intf_dict:
+            click.echo("Ports to be added : \n {}".format(json.dumps(add_intf_dict, indent=4)))
         else:
-            click.echo("port_dict is None!")
+            click.secho("[ERROR] port_dict is None!", fg='red')
             raise click.Abort()
 
-        """ Special Case: Dont delete those ports  where the current mode and speed of the parent port remains unchanged
-                          to limit the traffic impact
-        """
+        """Special Case: Dont delete those ports  where the current mode and speed of the parent port remains unchanged
+                          to limit the traffic impact """
+
         click.secho("\nAfter running Logic to limit the impact", fg="cyan", underline=True)
-        matched_item = [intf for intf, speed in intended_delete_interface_speed_dict.items() if intf in intended_add_interface_speed_dict.keys() and speed == intended_add_interface_speed_dict[intf]]
-        matched_item = [intf for intf, speed in intended_delete_interface_speed_dict.items() if intf in intended_add_interface_speed_dict.keys() and speed == intended_add_interface_speed_dict[intf]]
+        matched_item = [intf for intf, speed in del_intf_dict.items() if intf in add_intf_dict.keys() and speed == add_intf_dict[intf]]
 
-        map(intended_delete_interface_speed_dict.pop, matched_item)
-        map(intended_add_interface_speed_dict.pop, matched_item)
+        # Remove the interface which remains unchanged from both del_intf_dict and add_intf_dict
+        map(del_intf_dict.pop, matched_item)
+        map(add_intf_dict.pop, matched_item)
 
-        click.secho("\nFinal list of ports to be deleted : \n {} \nFinal list of ports to be added :  \n {}".format(json.dumps(intended_delete_interface_speed_dict, indent=4), json.dumps(intended_add_interface_speed_dict, indent=4), fg='green', blink=True))
+        click.secho("\nFinal list of ports to be deleted : \n {} \nFinal list of ports to be added :  \n {}".format(json.dumps(del_intf_dict, indent=4), json.dumps(add_intf_dict, indent=4), fg='green', blink=True))
+        if len(add_intf_dict.keys()) != 0:
+            ports, _ = parse_platform_json_file("platform.json", target_brkout_mode)
+            port_dict = {}
+            for intf in add_intf_dict:
+                if intf in ports.keys():
+                    port_dict[intf] = ports[intf]
 
-        if len(intended_delete_interface_speed_dict.keys()) == 0 and len(intended_add_interface_speed_dict.keys()) == 0:
-            click.secho("[WARNING] No action will be taken as current and desired Breakout Mode are same.", fg='orange')
-        else:
-            _generate_new_port_json(interface_name,intended_add_interface_speed_dict, target_breakout_mode)
+            with open('new_port_config.json', 'w') as f:  # writing JSON object
+                json.dump(port_dict, f, indent=4)
+
     else:
         click.secho("[ERROR] {} is not a Parent port. So, Breakout Mode is not available on this port".format(interface_name), fg='red')
 
