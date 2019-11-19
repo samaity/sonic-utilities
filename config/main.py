@@ -1159,7 +1159,6 @@ def speed(ctx, interface_name, interface_speed, verbose):
     run_command(command, display_cmd=verbose)
 
 
-
 #
 # 'breakout' subcommand
 #
@@ -1192,31 +1191,31 @@ def breakout(ctx, interface_name, mode, verbose):
             click.echo("port_dict is None!")
             raise click.Abort()
         if interface_name in port_dict.keys():
-            cur_brkout_mode = cur_brkout_dict[interface_name]["current_brkout_mode"]
+            cur_brkout_mode = cur_brkout_dict[interface_name]["brkout_mode"]
             click.echo("\nRunning Breakout Mode : {} \nTarget Breakout Mode : {}".format(cur_brkout_mode, target_brkout_mode))
             if (cur_brkout_mode == target_brkout_mode):
                 click.secho("[WARNING] No action will be taken as current and desired Breakout Mode are same.", fg='magenta')
                 sys.exit(0)
 
-            # First, Shut down interface
-            config_db = ctx.obj['config_db']
-            if get_interface_naming_mode() == "alias":
-                interface_name = interface_alias_to_name(interface_name)
-                if interface_name is None:
-                    ctx.fail("'interface_name' is None!")
-
-            if interface_name_is_valid(interface_name) is False:
-                ctx.fail("Interface name is invalid. Please enter a valid interface name!!")
-
-            if interface_name.startswith(PORT_STR):
-                config_db.mod_entry("PORT", interface_name, {"admin_status": "down"})
-            else:
-                click.secho("[ERROR] Could not get the correct interface name, exiting", fg='red')
-                sys.exit(1)
-
             # Get list of interfaces to be deleted
             del_intf_dict = _get_child_interface_speed_dict(interface_name, cur_brkout_mode)
             if del_intf_dict:
+                for intf in del_intf_dict.keys():
+                    # First, Shut down interface
+                    config_db = ctx.obj['config_db']
+                    if get_interface_naming_mode() == "alias":
+                        interface_name = interface_alias_to_name(intf)
+                        if intf is None:
+                            ctx.fail("interface name is None!")
+
+                    if interface_name_is_valid(intf) is False:
+                        ctx.fail("Interface name is invalid. Please enter a valid interface name!!")
+
+                    if intf.startswith(PORT_STR):
+                        config_db.mod_entry("PORT", intf, {"admin_status": "down"})
+                    else:
+                        click.secho("[ERROR] Could not get the correct interface name, exiting", fg='red')
+                        sys.exit(1)
                 click.echo("\nPorts to be deleted : \n {}".format(json.dumps(del_intf_dict, indent=4)))
             else:
                 click.secho("[ERROR] del_intf_dict is None! No interfaces are there to be deleted", fg='red')
@@ -1251,8 +1250,32 @@ def breakout(ctx, interface_name, mode, verbose):
             with open('new_port_config.json', 'w') as f:  # writing JSON object
                 json.dump(port_dict, f, indent=4)
 
+            """
+            Added for additional Testing. will remove Later
+            """
+            config_db = ConfigDBConnector()
+            config_db.connect()
+            for intf in port_dict.keys():
+                click.secho("before modification for port {}".format(intf),  fg="cyan", underline=True)
+                print(config_db.get_entry('PORT',intf))
+                click.secho("after modification for port {}".format(intf),  fg="cyan", underline=True)
+                config_db.mod_entry('PORT',intf, port_dict[intf])
+                print(config_db.get_entry('PORT',intf))
+
+            click.secho("PREV Breakout mode for port {}".format(interface_name),  fg="cyan", underline=True)
+            print(config_db.get_entry('BREAKOUT_CFG',interface_name))
+
+            brkout_cfg_keys = config_db.get_keys('BREAKOUT_CFG')
+            if interface_name.decode("utf-8") in  brkout_cfg_keys:
+                config_db.set_entry("BREAKOUT_CFG", interface_name,{'brkout_mode': target_brkout_mode})
+
+            click.secho("CUR Breakout mode for port {}".format(interface_name),  fg="cyan", underline=True)
+            print(config_db.get_entry('BREAKOUT_CFG',interface_name))
+
+
     else:
         click.secho("[ERROR] {} is not a Parent port. So, Breakout Mode is not available on this port".format(interface_name), fg='red')
+
 
 
 #
