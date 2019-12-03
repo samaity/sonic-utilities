@@ -1270,7 +1270,7 @@ def breakout(ctx, interface_name, mode, verbose):
 
         click.secho("\nFinal list of ports to be deleted : \n {} \nFinal list of ports to be added :  \n {}".format(json.dumps(del_intf_dict, indent=4), json.dumps(add_intf_dict, indent=4), fg='green', blink=True))
         if len(add_intf_dict.keys()) != 0:
-            ports, _ = parse_platform_json_file("platform.json", target_brkout_mode)
+            ports, _ = parse_platform_json_file("platform.json", interface_name, target_brkout_mode)
             port_dict = {}
             for intf in add_intf_dict:
                 if intf in ports.keys():
