@@ -170,7 +170,7 @@ def load_configMgmt(verbose):
         raise Exception("Failed to load the config. Error: {}".str(e))
 
 
-def delete_Ports(final_delPorts,force_remove_dependencies, verbose):
+def delete_Ports(cm, final_delPorts,force_remove_dependencies, verbose):
     """
     Delete all ports.
     del_ports: list of port names.
@@ -193,7 +193,7 @@ def delete_Ports(final_delPorts,force_remove_dependencies, verbose):
     print("\n*** Ports have been deleted successfully ***\n")
 
 
-def add_Ports(final_addPorts, port_dict, load_predefined_config, verbose):
+def add_Ports(cm, final_addPorts, port_dict, load_predefined_config, verbose):
     """
     Add Ports and default config for ports to config DB, after validation of data tree.
     add_ports : list of ports
@@ -1638,18 +1638,18 @@ def breakout(ctx, interface_name, mode, verbose, force_remove_dependencies, load
         json.dump(port_dict, f, indent=4)
 
 
-     """ Load config for the commands which are capable of change in config DB """
-     cm = load_configMgmt(verbose)
-     """ Delete all ports if forced else print dependencies using configMgmt API """
-     final_delPorts = [intf for intf in del_intf_dict.keys()]
-     delete_Ports(final_delPorts, force_remove_dependencies, verbose)
+    """ Load config for the commands which are capable of change in config DB """
+    cm = load_configMgmt(verbose)
+    """ Delete all ports if forced else print dependencies using configMgmt API """
+    final_delPorts = [intf for intf in del_intf_dict.keys()]
+    delete_Ports(cm, final_delPorts, force_remove_dependencies, verbose)
 
-     # TODOFIX:  Check ASIC DB whether interfaces got deleted or not
-     time.sleep(20)
+    # TODOFIX:  Check ASIC DB whether interfaces got deleted or not
+    time.sleep(5)
 
-     """ Add ports with its attributes using configMgmt API """
-     final_addPorts = [intf for intf in del_intf_dict.keys()]
-     add_Ports(final_addPorts, port_dict, load_predefined_config, verbose)
+    """ Add ports with its attributes using configMgmt API """
+    final_addPorts = [intf for intf in del_intf_dict.keys()]
+    add_Ports(cm, final_addPorts, port_dict, load_predefined_config, verbose)
 
     """ Added for additional Testing. will remove Later """
     for intf in port_dict.keys():
