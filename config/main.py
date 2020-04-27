@@ -107,7 +107,7 @@ def _get_option(ctx,args,incomplete):
         if interface_name in breakout_file_input[INTF_KEY]:
             breakout_mode_list = [v["breakout_modes"] for i ,v in breakout_file_input[INTF_KEY].items() if i == interface_name][0]
             breakout_mode_options = []
-            for i in breakout_mode_list.split(','):
+            for i in breakout_mode_list:
                     breakout_mode_options.append(i)
             all_mode_options = [str(c) for c in breakout_mode_options if incomplete in c]
             return all_mode_options
